@@ -3,18 +3,19 @@
 
 create or replace procedure full_load()
 as $$
+	declare 
+			current_update_dt timestamp = now();
 	begin
-		call staging.film_load();
-		call staging.inventory_load();
-		call staging.rental_load();
+		call staging.film_load(current_update_dt);
+		call staging.inventory_load(current_update_dt);
+		call staging.rental_load(current_update_dt);
 		call staging.payment_load();
-		call staging.staff_load();
+		call staging.staff_load(current_update_dt);
 		call staging.address_load();
 		call staging.city_load();
 		call staging.store_load();
 		
 		
-		call core.fact_delete();
 		call core.load_inventory();
 		call core.load_staff();
 		call core.load_payment();
@@ -26,5 +27,3 @@ as $$
 $$ language plpgsql;
 
 call full_load();
-
-

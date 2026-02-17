@@ -6,6 +6,7 @@ create schema if not exists core;
 -- Удаление существующих таблиц (если есть)
 drop table if exists core.fact_payment;
 drop table if exists core.fact_rental;
+
 drop TABLE if exists core.dim_date;
 drop table if exists core.dim_inventory;
 drop table if exists core.dim_staff;
@@ -31,7 +32,10 @@ create table core.dim_staff (
 	last_name varchar(45) not null,
 	address varchar(50) not null,
 	district varchar(20) not null,
-	city_name varchar(50) not null
+	city_name varchar(50) not null,
+	effective_date_from timestamp not null,
+	effective_date_to timestamp not null,
+	is_active boolean not null
 );
 
 create table core.fact_payment (
@@ -50,7 +54,8 @@ create table core.fact_rental (
 	staff_fk integer not null references core.dim_staff(staff_pk),
 	rental_date_fk integer not null references core.dim_date(date_dim_pk),
 	return_date_fk integer references core.dim_date(date_dim_pk),
-	cnt int2 not null,
-	amount numeric(7,2)
+	effective_date_from timestamp not null,
+	effective_date_to timestamp not null,
+	is_active boolean not null
 );
 

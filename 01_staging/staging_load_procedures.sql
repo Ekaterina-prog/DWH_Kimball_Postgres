@@ -1,12 +1,42 @@
 -- Процедуры загрузки данных из источника в staging слой
 -- Реализована полная перезапись данных (full reload)
 
-create or replace procedure staging.film_load()
- as $$
-	declare 
-			current_update_dt timestamp = now();
+create or replace function staging.get_last_update_table(table_name varchar) returns timestamp
+as $$
 	begin
-		
+		return coalesce( 
+			(
+				select
+					max(update_dt)
+				from
+					staging.last_update lu
+				where 
+					lu.table_name = get_last_update_table.table_name
+			),
+			'1900-01-01'::date	
+		);
+	end;
+$$ language plpgsql;
+
+create or replace procedure staging.set_table_load_time(table_name varchar, current_update_dt timestamp default now())
+as $$
+	begin
+		insert into staging.last_update
+		(
+			table_name, 
+			update_dt
+		)
+		values
+		(
+			table_name, 
+			current_update_dt
+		);
+	end;
+$$ language plpgsql;
+
+create or replace procedure staging.film_load(current_update_dt timestamp)
+ as $$
+	begin
 		delete from staging.film;
 
 		insert
@@ -42,36 +72,18 @@ create or replace procedure staging.film_load()
 		from
 			film_src.film;
 
-		insert into staging.last_update
-		(
-			table_name, 
-			update_dt
-		)
-		values
-		(
-			'staging.film', 
-			current_update_dt
-		);
+		call staging.set_table_load_time('staging.film', current_update_dt);
+
 	end;
 $$ language plpgsql;
 
-create or replace procedure staging.inventory_load()
+create or replace procedure staging.inventory_load(current_update_dt timestamp)
 as $$
 	declare 
 		last_update_dt timestamp;
 	begin
-		last_update_dt = coalesce( 
-			(
-				select
-					max(update_dt)
-				from
-					staging.last_update
-				where 
-					table_name = 'staging.inventory'
-			),
-			'1900-01-01'::date	
-		);
-		
+		last_update_dt = staging.get_last_update_table('staging.inventory');
+			
 		delete from staging.inventory;
 
 		insert into staging.inventory
@@ -95,22 +107,17 @@ as $$
 			i.last_update >= last_update_dt
 			or i.deleted >= last_update_dt;
 		
-		INSERT INTO staging.last_update
-		(
-			table_name, 
-			update_dt
-		)
-		VALUES(
-			'staging.inventory', 
-			now()
-		);
-
+		call staging.set_table_load_time('staging.inventory', current_update_dt);
+		
 	end;
 $$ language plpgsql;
 
-create or replace procedure staging.rental_load()
+create or replace procedure staging.rental_load(current_update_dt timestamp)
 as $$
+	declare 
+		last_update_dt timestamp;
 	begin
+		last_update_dt = staging.get_last_update_table('staging.rental');
 		delete from staging.rental;
 
 		insert into staging.rental
@@ -120,7 +127,9 @@ as $$
 			inventory_id, 
 			customer_id, 
 			return_date, 
-			staff_id
+			staff_id,
+			last_update,
+			deleted
 		)
 		select 
 			rental_id, 
@@ -128,11 +137,18 @@ as $$
 			inventory_id, 
 			customer_id, 
 			return_date, 
-			staff_id
+			staff_id,
+			last_update,
+			deleted
 		from
-			film_src.rental;
-	end;
+			film_src.rental
+		where 
+			deleted >= last_update_dt
+			or last_update >= last_update_dt;
 
+		call staging.set_table_load_time('staging.rental', current_update_dt);
+
+	end;
 $$ language plpgsql;
 
 create or replace procedure staging.payment_load()
@@ -161,9 +177,13 @@ as $$
 	end;
 $$ language plpgsql;
 
-create or replace procedure staging.staff_load()
+create or replace procedure staging.staff_load(current_update_dt timestamp)
 as $$
+	declare 
+		last_update_dt timestamp;
 	begin 
+		last_update_dt = staging.get_last_update_table('staging.staff');
+	
 		delete from staging.staff;
 	
 		insert into staging.staff
@@ -171,15 +191,25 @@ as $$
 			staff_id,
 			first_name,
 			last_name,
-			store_id
+			store_id,
+			deleted,
+			last_update
 		)
 		select
 			staff_id,
 			first_name,
 			last_name,
-			store_id 
+			store_id,
+			deleted,
+			last_update
 		from
-			film_src.staff s;
+			film_src.staff s
+		where 
+			s.last_update >= last_update_dt
+			or s.deleted >= last_update_dt;
+
+		call staging.set_table_load_time('staging.staff', current_update_dt);
+		
 	end;
 $$ language plpgsql;
 
