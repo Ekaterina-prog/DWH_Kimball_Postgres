@@ -38,13 +38,18 @@ create table core.dim_staff (
 	is_active boolean not null
 );
 
+-- добавили поле rental_id в факты, для историчности добавили три поля
 create table core.fact_payment (
 	payment_pk serial primary key,
 	payment_id integer not null,
 	amount numeric(7,2) not null,
+	rental_id int4 not null,
 	payment_date_fk integer not null references core.dim_date(date_dim_pk),
 	inventory_fk integer not null references core.dim_inventory(inventory_pk),
-	staff_fk integer not null references core.dim_staff(staff_pk)
+	staff_fk integer not null references core.dim_staff(staff_pk),
+	effective_date_from timestamp not null,
+	effective_date_to timestamp not null,
+	is_active boolean not null
 );
 
 create table core.fact_rental (

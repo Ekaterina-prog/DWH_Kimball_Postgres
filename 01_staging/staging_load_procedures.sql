@@ -151,9 +151,13 @@ as $$
 	end;
 $$ language plpgsql;
 
-create or replace procedure staging.payment_load()
+create or replace procedure staging.payment_load(current_update_dt timestamp)
 as $$
+	declare 
+		last_update_dt timestamp;
 	begin
+		last_update_dt = staging.get_last_update_table('staging.payment');
+		
 		delete from staging.payment;
 
 		insert into staging.payment
@@ -162,18 +166,31 @@ as $$
 			customer_id, 
 			staff_id, 
 			rental_id, 
+			inventory_id,
 			amount, 
-			payment_date
+			payment_date,
+			last_update,
+			deleted
 		)
 		select
-			payment_id, 
-			customer_id, 
-			staff_id, 
-			rental_id, 
-			amount, 
-			payment_date
+			p.payment_id, 
+			p.customer_id, 
+			p.staff_id, 
+			p.rental_id, 
+			r.inventory_id,
+			p.amount, 
+			p.payment_date,
+			p.last_update,
+			p.deleted
 		from
-			film_src.payment;
+			film_src.payment p
+			join film_src.rental r using (rental_id)
+		where
+			p.deleted >= last_update_dt
+			or p.last_update >= last_update_dt
+			or r.last_update >= last_update_dt;
+		
+		call staging.set_table_load_time('staging.payment', current_update_dt);
 	end;
 $$ language plpgsql;
 

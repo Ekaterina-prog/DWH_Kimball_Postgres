@@ -54,12 +54,15 @@ create table staging.rental (
 );
 
 create table staging.payment (
-    payment_id int4 not null,
-    customer_id int2 not null,
-    staff_id int4 not null,
-    rental_id int4 not null,
-    amount numeric(5, 2) not null,
-    payment_date timestamp not null
+	payment_id int4 not null,
+	customer_id int2 not null,
+	staff_id int2 not null,
+	rental_id int4 not null,
+	inventory_id int4 not null,
+	amount numeric(5,2) not null,
+	payment_date timestamp not null,
+	last_update timestamp not null,
+	deleted timestamp 
 );
 
 create table staging.staff (
