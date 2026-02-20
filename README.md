@@ -1,327 +1,222 @@
-Архитектура DWH (Kimball, PostgreSQL)
+Architecture Overview: DWH (Kimball, PostgreSQL)
 
 1. Source Layer
+Source system: PostgreSQL database dvdrental.
 
-Источник данных — PostgreSQL база dvdrental.
+Connection is implemented via postgres_fdw.
+Source tables are imported into schema film_src.
 
-Подключение реализовано через postgres_fdw.
-Данные импортированы в схему film_src.
-
-Source Layer не содержит изменений бизнес-логики — это отражение структуры операционной системы.
+The Source layer contains no business transformations — it reflects the operational system structure as-is.
 
 2. Staging Layer
+Schema: staging
 
-Схема: staging
+Purpose
+- Intermediate storage
+- Minimal technical transformation
+- Preparation for Core loading
+- Incremental data processing
 
-Назначение:
+Key Characteristics
+- Full load for small reference tables
+- Incremental load for inventory, rental, payment
+- Soft delete support (deleted column)
+- Load control via staging.last_update
 
-промежуточное хранение данных
+Centralized Load Time Control
+- staging.get_last_update_table(table_name)
+- staging.set_table_load_time(table_name, current_update_dt)
 
-минимальная техническая обработка
+The staging layer:
+- Does not contain surrogate keys
+- Does not implement business logic
+- Mirrors source structure with technical extensions (last_update, deleted)
 
-подготовка к загрузке в Core слой
+Implemented Tables
+film, inventory, rental, payment, staff, address, city, store
 
-реализация инкрементальной загрузки
+3. Core Layer (Star Schema – Kimball)
+Schema: core
 
-Особенности:
+A dimensional model implemented using Kimball methodology.
+Facts reference dimensions via surrogate keys.
 
-Полная загрузка для большинства таблиц
-
-Инкрементальная загрузка для inventory, rental, payment
-
-Поддержка Soft Delete через поле deleted
-
-Контроль загрузки через таблицу staging.last_update
-
-Централизация логики времени загрузки:
-
-staging.get_last_update_table(table_name)
-
-staging.set_table_load_time(table_name, current_update_dt)
-
-Staging слой:
-
-не содержит surrogate keys
-
-не содержит бизнес-логики
-
-отражает структуру источника с техническими расширениями (last_update, deleted)
-
-Реализованные таблицы:
-
-film
-
-inventory
-
-rental
-
-payment
-
-staff
-
-address
-
-city
-
-store
-
-3. Core Layer (Star Schema)
-
-Схема: core
-Реализована звездная схема по методологии Kimball.
-
-Факты используют surrogate keys измерений.
-
-Измерения (Dimensions)
+Dimensions
 dim_date
+Calendar dimension generated via core.load_date.
 
-Календарное измерение, генерируется процедурой core.load_date.
-
-Содержит:
-
-день, месяц, квартал, год
-
-ISO week
-
-week_of_year
-
-first/last day of period
-
-признак выходного дня
+Includes:
+- Day, month, quarter, year
+- ISO week, week_of_year
+- First/last day of period
+- Weekend indicator
 
 dim_inventory (SCD Type 2)
+Implements Slowly Changing Dimension Type 2.
 
-Измерение реализует Slowly Changing Dimension Type 2.
+Historical fields:
+- effective_date_from
+- effective_date_to
+- is_active
 
-Поддержка историзации:
-
-effective_date_from
-
-effective_date_to
-
-is_active
-
-Особенность:
-Измерение денормализовано — включает атрибуты из film:
-
-title
-
-rental_duration
-
-rental_rate
-
-length
-
-rating
-
-Изменение параметров фильма приводит к созданию новой версии строки в dim_inventory, даже если inventory_id не менялся.
-
-Это обеспечивает историческую корректность фактов.
+Denormalized attributes from film:
+- title
+- rental_duration
+- rental_rate
+- length
+- rating
+Any change in film attributes creates a new dimension version, ensuring historical correctness of facts.
 
 dim_staff
+Fully reloaded dimension (no SCD logic).
 
-Измерение сотрудников.
+4. Fact Tables
+fact_rental
+Transaction-level fact table.
 
-Стратегия загрузки:
+Contains:
+- rental_id
+- inventory_fk
+- staff_fk
+- rental_date_fk
+- return_date_fk
 
-Полная перезагрузка (без SCD)
-
-4. Факты (Facts)
-   fact_rental
-
-Факт аренды.
-
-Содержит:
-
-rental_id
-
-inventory_fk
-
-staff_fk
-
-rental_date_fk
-
-return_date_fk
-
-Реализована историчность (SCD Type 2):
-
-Поля:
-
-effective_date_from
-
-effective_date_to
-
-is_active
-
-Новая версия создается при изменении:
-
-staff_id
-
-inventory_id
-
-rental_date
-
-return_date (если уже была и изменилась)
-
-Если return_date была NULL и заполнилась впервые — выполняется UPDATE без создания новой версии.
+Implements SCD Type 2.
+New version is created when:
+- staff_id
+- inventory_id
+- rental_date
+- return_date (if already populated and changed)
+If return_date was NULL and becomes populated for the first time, an UPDATE is performed without versioning.
 
 fact_payment
+Contains:
+- payment_id
+- amount
+- rental_id
+- payment_date_fk
+- inventory_fk
+- staff_fk
 
-Факт платежей.
+Implements:
+- Incremental loading
+- Soft delete handling
+- SCD Type 2 (business-event auditing)
 
-Содержит:
-
-payment_id
-
-amount
-
-rental_id
-
-payment_date_fk
-
-inventory_fk
-
-staff_fk
-
-Реализована:
-
-инкрементальная загрузка
-
-поддержка Soft Delete
-
-историчность (SCD Type 2)
-
-Историчность поддерживается по бизнес-полям:
-
-amount
-
-rental_id
-
-payment_date
-
-Если изменяется хотя бы одно из этих полей:
-
-текущая версия строки закрывается
-
-создается новая версия записи
-
-Если изменяются только surrogate keys измерений (inventory_fk, staff_fk):
-
-выполняется UPDATE без создания новой версии
-
-Историчность в фактах реализована для поддержки аудита бизнес-событий, а не изменений измерений.
-
-
+Versioning is triggered by changes in:
+-amount
+-rental_id
+- payment_date
+Changes in surrogate keys only trigger UPDATE (no new version).
+Historical logic is applied to preserve business-event auditability.
 
 5. Data Mart Layer
+Schema: report
 
-Схема: report
+Aggregated fact tables:
+- report.sales_date
+- report.sales_film
 
-Реализованы агрегированные витрины:
+Procedures:
+- report.sales_date_calc()
+-report.sales_film_calc()
 
-report.sales_date — продажи по датам
+Purpose:
+- Performance optimization
+- Reduced load on transactional facts
+- Pre-calculated metrics
 
-report.sales_film — продажи по фильмам
+6. Loading Strategy
+Hybrid strategy:
 
-Процедуры:
+Incremental Load
+- staging.inventory
+- staging.rental
+- staging.payment
 
-report.sales_date_calc()
+SCD Type 2
+- core.dim_inventory
+- core.fact_rental
+- core.fact_payment
 
-report.sales_film_calc()
+Full Reload
+- dim_staff
+- film (reference)
+Calendar dimension generated separately.
 
-6. Стратегия загрузки
-
-Используется гибридная стратегия:
-
-Инкрементальная загрузка для:
-
-staging.inventory
-
-staging.rental
-
-staging.payment
-
-SCD Type 2 для:
-
-core.dim_inventory
-
-core.fact_rental
-
-core.fact_payment
-
-Полная загрузка для:
-
-dim_staff
-
-film (справочник)
-
-Генерация календаря через отдельную процедуру
-
-Единое время загрузки
-
-В full_load() используется единый параметр:
+Unified Load Timestamp
+full_load() uses a single timestamp:
 
 declare current_update_dt timestamp = now();
 
-Это время передается во все процедуры staging слоя.
+This timestamp is passed to all staging procedures to ensure consistency and eliminate data desynchronization.
 
-Преимущество:
+7. Architectural Value
+The implemented solution provides:
+- Incremental processing without full fact truncation
+- Soft delete support
+- Historical tracking in dimensions and facts
+- Correct linkage between fact and dimension versions
+- Business-event auditability
+- Reproducible reporting snapshots
+- Improved scalability through reduced full reload operations
 
-устраняется рассинхронизация данных
+8. Fact Table Types
 
-обеспечивается консистентность среза загрузки
+Transaction Fact Tables
+- fact_rental
+- fact_payment
 
-7. Практическая ценность архитектуры
+Characteristics:
+- One row per business event
+- Maximum granularity
+- Fully additive metrics (amount)
 
-Реализованная модель обеспечивает:
+Accumulating Snapshot (Partially Implemented)
+fact_rental tracks lifecycle updates (e.g., return_date), enabling:
+- Rental duration analysis
+- Delay tracking
+- Process stage monitoring
 
-инкрементальную загрузку без полной очистки фактов
+Aggregate Fact Tables
+- report.sales_date
+- report.sales_film
 
-поддержку Soft Delete
+Used for:
+- Faster reporting
+- Pre-aggregated analytics
+- Reduced workload on transactional facts
 
-историчность измерений и фактов
+Semi-Additive and Non-Additive Metrics
+Conceptual examples:
+- Inventory balances → semi-additive
+- Ratios and percentages → non-additive
+The project demonstrates understanding of different fact behaviors and their architectural implications.
 
-корректную связь факта с версией измерения
+Further Learning: Inmon Architecture (In Progress)
+After completing the Kimball implementation, the project continues with the Inmon enterprise data warehouse approach.
 
-аудит изменений бизнес-событий
+Currently Implemented
+- Staging layer
+- ODS layer (current operational state)
+- REF layer (surrogate key mapping)
+- Transactional ETL process
 
-воспроизводимость отчетов на разные даты построения
+Planned Next
+- Integration layer
+- DDS (historical detailed storage)
+- Data marts built on top of DDS
+- Architectural comparison: Kimball vs Inmon
 
-Фактовые таблицы больше не требуют полной перезагрузки, что снижает нагрузку и увеличивает масштабируемость решения.
 
-8. Типы таблиц фактов
-В проекте используются следующие типы фактов:
 
-8.1 Transaction Fact Table
-fact_rental
-fact_payment
-Характеристики:
-одна строка = одно бизнес-событие
-максимальная гранулярность
-полная аддитивность (amount суммируется по всем измерениям)
-Используется для гибкой аналитики.
 
-8.2 Accumulating Snapshot (частично)
-fact_rental содержит признаки накопительной модели:
-обновляется return_date
-отслеживается жизненный цикл аренды
-Это позволяет анализировать:
-время возврата
-просрочки
-этапы выполнения операции
 
-8.3 Aggregate Fact Tables (Data Mart Layer)
-report.sales_date
-report.sales_film
-Это агрегированные таблицы фактов.
-Назначение:
-ускорение построения отчетов
-снижение нагрузки на транзакционные факты
-предрасчет метрик
 
-8.4 Полуаддитивные и неаддитивные показатели
-Пример:
-остатки товаров (если бы реализовывались) — semi-additive
-процент возврата — non-additive (пересчитывается)
-Проект демонстрирует понимание различий типов фактов и их влияния на архитектуру.
+
+
+
+
+
+
 
