@@ -1,346 +1,146 @@
-Architecture Overview: DWH (Kimball, PostgreSQL)
+Enterprise Data Warehouse Architecture (PostgreSQL)
+
+Overview
+
+This project implements a comprehensive Enterprise Data Warehouse in PostgreSQL using three major architectural paradigms:
+- Kimball (Dimensional Modeling / Star Schema)
+- Inmon (Corporate Information Factory / 3NF)
+- Data Vault 2.0 (Raw Vault)
+
+The solution demonstrates practical implementation of different DWH approaches within a single unified system.
+
+Architecture Layers
 
 1. Source Layer
-Source system: PostgreSQL database dvdrental.
-
-Connection is implemented via postgres_fdw.
-Source tables are imported into schema film_src.
-
-The Source layer contains no business transformations — it reflects the operational system structure as-is.
+- Source system: PostgreSQL (dvdrental)
+- Connected via postgres_fdw
+- No business transformations
+- Pure operational data reflection
 
 2. Staging Layer
-Schema: staging
+Purpose:
+- Data ingestion
+- Incremental processing
+- Technical preparation for core layers
 
-Purpose
-- Intermediate storage
-- Minimal technical transformation
-- Preparation for Core loading
-- Incremental data processing
-
-Key Characteristics
+Implemented features:
+- Incremental load for transactional tables
 - Full load for small reference tables
-- Incremental load for inventory, rental, payment
-- Soft delete support (deleted column)
-- Load control via staging.last_update
+- Soft delete support (deleted flag)
+- Centralized load timestamp control
+- Unified orchestration via full_load()
 
-Centralized Load Time Control
-- staging.get_last_update_table(table_name)
-- staging.set_table_load_time(table_name, current_update_dt)
+Value:
+- Prevents data desynchronization
+- Ensures consistent load execution
+- Enables scalable incremental processing
 
-The staging layer:
-- Does not contain surrogate keys
-- Does not implement business logic
-- Mirrors source structure with technical extensions (last_update, deleted)
+3. Core Layer – Kimball (Star Schema)
 
-Implemented Tables
-film, inventory, rental, payment, staff, address, city, store
-
-3. Core Layer (Star Schema – Kimball)
-Schema: core
-
-A dimensional model implemented using Kimball methodology.
-Facts reference dimensions via surrogate keys.
+Dimensional model implementation:
 
 Dimensions
-dim_date
-Calendar dimension generated via core.load_date.
-
-Includes:
-- Day, month, quarter, year
-- ISO week, week_of_year
-- First/last day of period
-- Weekend indicator
-
-dim_inventory (SCD Type 2)
-Implements Slowly Changing Dimension Type 2.
-
-Historical fields:
-- effective_date_from
-- effective_date_to
-- is_active
-
-Denormalized attributes from film:
-- title
-- rental_duration
-- rental_rate
-- length
-- rating
-Any change in film attributes creates a new dimension version, ensuring historical correctness of facts.
-
-dim_staff
-Fully reloaded dimension (no SCD logic).
-
-4. Fact Tables
-fact_rental
-Transaction-level fact table.
-
-Contains:
-- rental_id
-- inventory_fk
-- staff_fk
-- rental_date_fk
-- return_date_fk
-
-Implements SCD Type 2.
-New version is created when:
-- staff_id
-- inventory_id
-- rental_date
-- return_date (if already populated and changed)
-If return_date was NULL and becomes populated for the first time, an UPDATE is performed without versioning.
-
-fact_payment
-Contains:
-- payment_id
-- amount
-- rental_id
-- payment_date_fk
-- inventory_fk
-- staff_fk
-
-Implements:
-- Incremental loading
-- Soft delete handling
-- SCD Type 2 (business-event auditing)
-
-Versioning is triggered by changes in:
--amount
--rental_id
-- payment_date
-Changes in surrogate keys only trigger UPDATE (no new version).
-Historical logic is applied to preserve business-event auditability.
-
-5. Data Mart Layer
-Schema: report
-
-Aggregated fact tables:
-- report.sales_date
-- report.sales_film
-
-Procedures:
-- report.sales_date_calc()
--report.sales_film_calc()
-
-Purpose:
-- Performance optimization
-- Reduced load on transactional facts
-- Pre-calculated metrics
-
-6. Loading Strategy
-Hybrid strategy:
-
-Incremental Load
-- staging.inventory
-- staging.rental
-- staging.payment
-
-SCD Type 2
-- core.dim_inventory
-- core.fact_rental
-- core.fact_payment
-
-Full Reload
+- dim_inventory (SCD Type 2)
+- dim_date
 - dim_staff
-- film (reference)
-Calendar dimension generated separately.
 
-Unified Load Timestamp
-full_load() uses a single timestamp:
-
-declare current_update_dt timestamp = now();
-
-This timestamp is passed to all staging procedures to ensure consistency and eliminate data desynchronization.
-
-7. Architectural Value
-The implemented solution provides:
-- Incremental processing without full fact truncation
-- Soft delete support
-- Historical tracking in dimensions and facts
-- Correct linkage between fact and dimension versions
-- Business-event auditability
-- Reproducible reporting snapshots
-- Improved scalability through reduced full reload operations
-
-8. Fact Table Types
-
-Transaction Fact Tables
+Fact Tables
 - fact_rental
 - fact_payment
 
-Characteristics:
-- One row per business event
-- Maximum granularity
-- Fully additive metrics (amount)
+Technical solutions:
+- SCD Type 2 for historical tracking
+- Incremental fact loading
+- Proper surrogate key management
+- Aggregated reporting marts
+ 
+Value:
+- Historical accuracy of reporting
+- High-performance analytical queries
+- BI-ready data structure
 
-Accumulating Snapshot (Partially Implemented)
-fact_rental tracks lifecycle updates (e.g., return_date), enabling:
-- Rental duration analysis
-- Delay tracking
-- Process stage monitoring
+4. Enterprise Layer – Inmon (3NF Architecture)
 
-Aggregate Fact Tables
-- report.sales_date
-- report.sales_film
-
-Used for:
-- Faster reporting
-- Pre-aggregated analytics
-- Reduced workload on transactional facts
-
-Semi-Additive and Non-Additive Metrics
-Conceptual examples:
-- Inventory balances → semi-additive
-- Ratios and percentages → non-additive
-The project demonstrates understanding of different fact behaviors and their architectural implications.
-
-9. Further Learning: Inmon Architecture (In Progress)
-After completing the Kimball implementation, the project continues with the Inmon enterprise data warehouse approach.
-
-Currently Implemented
-- Staging layer
-- ODS layer (current operational state)
-- REF layer (surrogate key mapping)
-- Transactional ETL process
-
-Planned Next
-- Integration layer
+Implemented layers:
+- ODS (Operational Data Store)
+- Integration Layer (natural → surrogate key replacement)
 - DDS (historical detailed storage)
-- Data marts built on top of DDS
-- Architectural comparison: Kimball vs Inmon
 
-10. Inmon Architecture (Enterprise DWH Approach)
-In addition to the Kimball dimensional model, the repository implements the Inmon enterprise architecture.
+Technical solutions:
+- Row-level change detection using md5(row::text)
+- Version closing on data change
+- Enterprise-level historical tracking
 
-Implemented Layers
+Value:
+- Centralized corporate data model
+- Clean separation of operational and analytical structures
+- Strong support for enterprise reporting
 
-Staging
-Raw data ingestion from source (PostgreSQL dvdrental).
+5. Data Vault 2.0 – Raw Vault
 
-ODS (Operational Data Store)
-Current-state operational layer with incremental logic and technical fields (last_update, deleted).
+Raw Vault implementation includes:
 
-REF
-Surrogate key mapping layer.
-Natural keys are mapped to enterprise surrogate identifiers.
+Hubs
+- Hash-based surrogate keys (MD5 of business keys)
+- Business identifiers
+- LoadDate / RecordSource
 
-Integration Layer (3NF Transformation)
-Schema: integration
-
-Purpose:
-- Transform ODS data into enterprise 3NF structure
-- Replace natural keys with surrogate keys
-- Prepare data for historical storage (DDS)
-
-Characteristics:
-- Based on ODS
-- Full reload for small reference tables (film, inventory)
-- Incremental processing for transactional tables (rental)
-- No date dimension at this stage (timestamps preserved)
-This layer represents the transformation from operational store to enterprise warehouse.
-
-DDS Layer (Historical Storage)
-Schema: dds
-
-Purpose:
-- Preserve historical state of reference data
-- Support time-based enterprise reporting
-
-Hitorical tracking is implemented for:
-- film
-- inventory
-
-Change detection is performed using row-level hashing:
-md5(row::text)
-
-If hash changes:
-- previous version is closed
-- new version is inserted
-
-Fields added:
-- date_effective_from
-- date_effective_to
-- is_active
--hash
-Dates are not normalized here (unlike Kimball).
-Date dimensions are created later at the data mart level if required.
-
-Architectural Perspective
-
-Kimball:
-- Dimensional model first (Star Schema)
-- Reporting-oriented
-- Optimized for performance
-
-Inmon:
-- Enterprise 3NF warehouse first
-- Centralized historical storage (DDS)
-- Data marts built on top of integrated warehouse
-The project demonstrates practical implementation of both approaches within PostgreSQL and highlights architectural trade-offs.
-
-11. Inmon Data Mart Layer
-
-A reporting layer (06_report) is implemented on top of the DDS layer.
-It includes a calendar dimension and a sales_by_date data mart with a dedicated function returning formatted sales results for visualization.
-
-12. Added data mart sales_film_by_date for BI visualization.
-Built Power BI dashboard with time filters, film filters and aggregated sales metrics.
-
-13. Data Vault
-Implementation of a Raw Vault layer based on the Data Vault 2.0 methodology.
-
-Key features:
-- Hub, Link, and Satellite modeling pattern
-- Hash-based surrogate keys
-- Incremental data loading approach
-- Historical data tracking (LoadDate / LoadEndDate)
-
-Technical implementation:
-- Added separate DWHDataVault database
-- Configured FDW connection to source system
-- Implemented staging layer (full + incremental load)
-- Created hubs, links and satellites
-- Implemented MD5 hash-based surrogate keys
-- Added full load orchestration script
-
-14. Anchor Modeling
-Conceptual implementation of Anchor Modeling demonstrating anchors, attributes, ties and fully normalized (6NF) schema design with extensibility.
-
-15. Data Vault (Raw Vault Implementation)
-The final stage of the project introduces a Data Vault 2.0 Raw Vault layer as an additional enterprise architecture approach alongside Kimball and Inmon.
-
-Schema: dataVault
-
-Implemented Components
-Hubs:
-- HubFilm
-- HubInventory
-- HubRental
-
-Each hub stores:
-- Hash-based surrogate key (MD5 of business key)
-- Business identifier
-- LoadDate, RecordSource
-- Links
-- LinkFilmInventory
-- LinkRentalInventory
- -Links use hash of concatenated business keys and implement insert-only loading.
+Links
+- Hash of concatenated business keys
+- Insert-only logic
 
 Satellites
-- Descriptive attributes separated from keys
+- Descriptive attributes
 - Historical tracking via LoadDate / LoadEndDate
-- Change detection using HashDiff
+- HashDiff-based change detection
 
-Key Architectural Takeaways
-- Hash-based surrogate keys eliminate sequence dependencies.
-- Insert-only logic ensures full historical reproducibility.
-- Raw Vault provides scalable and auditable enterprise storage.
+Technical characteristics:
+- Insert-only architecture
+- Hash-based surrogate keys
+- Full historical reproducibility
+- Independent scaling of entities
 
-The project now demonstrates three DWH paradigms:
-- Kimball (Dimensional)
-- Inmon (3NF Enterprise)
-- Data Vault 2.0 (Historical Backbone)
+Value:
+- High scalability
+- Easy addition of new data sources
+- Full auditability
+- Flexible enterprise backbone
 
+Key Technical Implementations
+- Incremental loading strategy
+- SCD Type 2 versioning
+- Soft delete handling
+- Hash-based surrogate keys (MD5)
+- Insert-only Raw Vault logic
+- Centralized load timestamp control
+- Hybrid DWH architecture
+- Power BI integration for reporting
 
+Data Mart Layer
+- Aggregated reporting tables (sales_by_date, sales_by_film)
+- Pre-calculated metrics
+- Reduced load on transactional facts
+- BI optimization
+
+Architectural Value
+
+The implemented solution provides:
+- Historical consistency
+- Enterprise scalability
+- Flexible data model extension
+- Business-event auditability
+- Reproducible reporting snapshots
+- Reduced full reload dependency
+- Clear separation of modeling paradigms
+
+Summary
+
+This project demonstrates practical implementation and comparison of three major DWH paradigms:
+- Kimball – optimized analytical reporting
+- Inmon – enterprise 3NF integration
+- Data Vault 2.0 – scalable historical backbone
+
+The architecture is designed to ensure flexibility, scalability, and full historical traceability across all layers.
 
 
 
